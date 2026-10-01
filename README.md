@@ -60,8 +60,9 @@ The repository is public, so look at the result first.
 
 1. Try one issue before a big batch (for example `--only 2026-11`, or a folder holding a single file) and open the page in a browser.
 2. Read `unresolved_links.tsv`, which the script writes in the repo root. It lists links that could not be resolved and still point at a tracking address, and any link that was replaced because it looked personal (marked `[PERSONAL LINK REMOVED]`).
-3. Run `git status` and `git diff --stat`. You should see new `docs/YYYY-MM.htm` files, their `img/` folders, `docs/index.html` and this README. You should **not** see the raw email exports.
-4. Commit and push. GitHub Pages republishes within a few minutes.
+3. Run `python archive_newsletters.py --check-images`. It should finish with `OK: every image is stored in the archive.` If it lists pages, see "Making sure every image is stored" below.
+4. Run `git status` and `git diff --stat`. You should see new `docs/YYYY-MM.htm` files, their `img/` folders, `docs/index.html` and this README. You should **not** see the raw email exports.
+5. Commit and push. GitHub Pages republishes within a few minutes.
 
 `link_cache.json` and `unresolved_links.tsv` are local working files and are listed in `.gitignore`.
 
@@ -73,7 +74,8 @@ The repository is public, so look at the result first.
 | `--from-file YYYY-MM=PATH` | Process one saved email. Can be repeated. |
 | `--series {newsletter,training}` | Which publication the issues belong to. Sets the output folder and page title. Default: `newsletter`. |
 | `--resolve-links` | Replace Emma, Mimecast and Safe Links tracking addresses with the real destination. This requests each link once, so each link registers one click in Emma. |
-| `--localise-images` | Download images into `img/` so the archive doesn't depend on Emma's image host. |
+| `--localise-images` | Download images into `img/` so the archive doesn't depend on Emma's image host. Covers `<img>` tags, `srcset`, `background=` attributes and CSS `url(...)`. Combine with `--sanitise-existing` to fix pages already in the archive. |
+| `--check-images` | Audit every page and report images that are not stored in the archive (remote, blocked when saved, or missing). Exits with an error if any are found. Needs no network. |
 | `--subscribe-url URL` | Address that replaces personal unsubscribe and update-preferences links. Default: the newsletter sign-up form, or `#` (no link) for the training update. |
 | `--only YYYY-MM` | Process a single issue. |
 | `--force` | Overwrite issues that already exist. |
@@ -97,7 +99,23 @@ Saved newsletters contain things that should not be published, so each page is c
 - With `--localise-images`, images are saved locally.
 - The "HTML version of this email" link is removed, because it points at a page that expires.
 
-Images set through CSS backgrounds are not downloaded; only `<img>` images are.
+Images in `<img>` tags, `srcset`, `background=` attributes and CSS `url(...)` are downloaded. A link that merely points at an image (`<a href>`) is left as a link.
+
+## Making sure every image is stored
+
+An archive page should never fetch anything from another website, because those images disappear when the sending service or its image host does. Check at any time with:
+
+```bash
+python archive_newsletters.py --check-images
+```
+
+It reads every page (no network needed) and reports three kinds of problem:
+
+- **remote**: the page still loads an image from another site (for example `cloudfront.net` or `images.e2ma.net`). Fix it with `python archive_newsletters.py --sanitise-existing --localise-images`. The script downloads each image into `img/YYYY-MM/` and rewrites the page, so run it while the originals still load.
+- **unusable**: the image address is something a browser can't load, such as `content-blocker://`, which an email app writes when it saves a message with remote content switched off. The real address is not in the file, so the image cannot be recovered from it. Re-save the email with remote images loading and re-run that issue with `--from-file YYYY-MM=path --force`.
+- **missing file**: the page points at a local file that isn't in the repository.
+
+Two things are ignored as harmless: hidden 1x1 tracking pixels and `custom-font://` font references, neither of which affects how a page looks.
 
 ## Cleaning pages that are already in the archive
 
@@ -118,7 +136,8 @@ Cleaning a page does not remove earlier versions from git history.
 - **`HTTP Error 403` or "download failed" for an Emma link.** The link has probably expired. Open it in a browser to check. If the page is gone, use a saved copy of the email instead.
 - **Links still start with `url.au.m.mimecastprotect.com`.** Resolving them failed, usually because the destination was an expired Emma tracking link. They are listed in `unresolved_links.tsv` so you can fix them by hand. If the visible link text is itself a web address, the script uses that.
 - **A file was skipped with "no 'Month YYYY' in filename".** Rename it to include the month name and year.
-- **Some images are still remote.** A download failed (a warning is printed). Re-run that issue with `--force` once the image host responds.
+- **Some images are still remote.** A download failed (a warning is printed) or the page predates `--localise-images`. Run `python archive_newsletters.py --check-images`, then `python archive_newsletters.py --sanitise-existing --localise-images` once the image host responds.
+- **Images are blank and `--check-images` says "unusable".** The email was saved with remote content blocked. See "Making sure every image is stored".
 - **"could not find the email body in this Outlook export".** The file looks like an Outlook export but has a different layout from the ones we've seen, so `extract_outlook_body` in the script needs adjusting.
 
 ## Archive

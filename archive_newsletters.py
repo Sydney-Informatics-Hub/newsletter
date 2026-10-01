@@ -10,6 +10,7 @@ Run from the root of your clone of Sydney-Informatics-Hub/newsletter:
     python archive_newsletters.py --from-dir DIR --series training ...   # training updates
     python archive_newsletters.py --update-indexes     # rebuild README list + docs/index.html
     python archive_newsletters.py --sanitise-existing --dry-run   # preview cleaning old pages
+    python archive_newsletters.py --check-images       # are all images stored in the archive?
 
 Standard library only (Python 3.8+).
 
@@ -236,16 +237,25 @@ def resolve_links(html, cache, cache_path, slug=""):
 
 
 IMG_SRC = re.compile(r"(<img\b[^>]*?\bsrc=)([\"'])(https?://[^\"']+)\2", re.I)
+BG_ATTR = re.compile(r"(\bbackground=)([\"'])((?:https?:)?//[^\"']+)\2", re.I)
+CSS_URL = re.compile(r"url\(\s*([\"']?)((?:https?:)?//[^)\"']+)\1\s*\)", re.I)
+SRCSET = re.compile(r"(\bsrcset=)([\"'])([^\"']*)\2", re.I)
 EXT_BY_TYPE = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
-               "image/webp": ".webp", "image/svg+xml": ".svg"}
+               "image/webp": ".webp", "image/svg+xml": ".svg", "image/x-icon": ".ico",
+               "image/vnd.microsoft.icon": ".ico", "image/avif": ".avif",
+               "font/woff2": ".woff2", "font/woff": ".woff", "font/ttf": ".ttf"}
 
 
 def localise_images(html, slug, out_dir):
+    """Download every remote image/asset the page embeds into <out_dir>/img/<slug>/
+    and point the page at the local copy. Covers <img src>, srcset, the legacy
+    background="..." attribute and CSS url(...). Links (<a href>) are left alone."""
     img_dir = out_dir / "img" / slug
     seen = {}
 
-    def swap(m):
-        url = m.group(3)
+    def get(url):
+        if url.startswith("//"):
+            url = "https:" + url
         if url not in seen:
             try:
                 data, ctype = fetch_bytes(url)
@@ -259,10 +269,123 @@ def localise_images(html, slug, out_dir):
                 time.sleep(DELAY / 2)
             except Exception as e:  # keep the remote URL if download fails
                 print(f"    ! image failed {url}: {e}", file=sys.stderr)
-                seen[url] = url
-        return f"{m.group(1)}{m.group(2)}{seen[url]}{m.group(2)}"
+                seen[url] = None
+        return seen[url]
 
-    return IMG_SRC.sub(swap, html)
+    def attr(m):                      # <img src> and background= (pre, quote, url)
+        new = get(m.group(3))
+        return m.group(0) if new is None else f"{m.group(1)}{m.group(2)}{new}{m.group(2)}"
+
+    def css(m):
+        new = get(m.group(2))
+        return m.group(0) if new is None else f"url({m.group(1)}{new}{m.group(1)})"
+
+    def srcset(m):
+        out = []
+        for cand in m.group(3).split(","):
+            bits = cand.strip().split()
+            if bits and re.match(r"(https?:)?//", bits[0]):
+                bits[0] = get(bits[0]) or bits[0]
+            out.append(" ".join(bits))
+        return f"{m.group(1)}{m.group(2)}{', '.join(out)}{m.group(2)}"
+
+    html = IMG_SRC.sub(attr, html)
+    html = SRCSET.sub(srcset, html)
+    html = BG_ATTR.sub(attr, html)
+    return CSS_URL.sub(css, html)
+
+
+# ----------------------------------------------------------- image auditing
+def _is_hidden_pixel(tag):
+    return bool(re.search(r"\bwidth=[\"']?1[\"']?[\s>/]", tag, re.I)
+                and re.search(r"\bheight=[\"']?1[\"']?[\s>/]", tag, re.I)
+                or re.search(r"display:\s*none", tag, re.I))
+
+
+def image_refs(html):
+    """Yield (kind, url, tag, position) for every place a page references an image/asset."""
+    for m in re.finditer(r"<img\b[^>]*>", html, re.I | re.S):
+        tag = m.group(0)
+        for k, pat in (("<img src>", r"\bsrc\s*=\s*([\"'])(.*?)\1"),
+                       ("srcset", r"\bsrcset\s*=\s*([\"'])(.*?)\1")):
+            for mm in re.finditer(pat, tag, re.I | re.S):
+                urls = ([c.split()[0] for c in mm.group(2).split(",") if c.split()]
+                        if k == "srcset" else [mm.group(2)])
+                for u in urls:
+                    yield k, u.strip(), tag, m.start()
+    for m in re.finditer(r"\bbackground\s*=\s*([\"'])(.*?)\1", html, re.I | re.S):
+        yield "background=", m.group(2).strip(), m.group(0), m.start()
+    for m in re.finditer(r"url\(\s*([\"']?)(.*?)\1\s*\)", html, re.I | re.S):
+        yield "css url()", m.group(2).strip(), m.group(0), m.start()
+
+
+def image_problems(html, page_dir):
+    """Return a list of (category, kind, url) for images that are NOT stored in the
+    archive. Categories: remote, unusable, missing file, plus harmless ones (hidden 1x1
+    trackers and unloadable font references) that never affect how a page looks."""
+    problems, seen = [], set()
+    for kind, url, tag, pos in image_refs(html):
+        if not url or url.startswith(("data:", "#", "about:")):
+            continue
+        if re.match(r"(https?:)?//", url):
+            cat = "remote"
+        elif re.match(r"[a-z][a-z0-9+.-]*:", url, re.I):      # content-blocker://, cid:, ...
+            if url.lower().startswith("custom-font:"):
+                cat = FONT_REF
+            elif kind in ("<img src>", "srcset") and _is_hidden_pixel(tag):
+                cat = HIDDEN_PIXEL
+            else:
+                cat = "unusable"
+        else:
+            path = Path(page_dir, urllib.parse.unquote(url.split("?")[0].split("#")[0]))
+            if path.exists():
+                continue
+            cat = "missing file"
+        if (pos, cat) not in seen:           # one finding per tag, not per attribute
+            seen.add((pos, cat))
+            problems.append((cat, kind, url))
+    return problems
+
+
+HIDDEN_PIXEL = "hidden tracker (harmless)"
+FONT_REF = "font reference (harmless)"
+HARMLESS = (HIDDEN_PIXEL, FONT_REF)
+
+
+def check_images():
+    """Audit every archived page. Returns the number of real problems found."""
+    cats = ["remote", "unusable", "missing file", *HARMLESS]
+    total = {c: 0 for c in cats}
+    bad_pages = {}
+    n_pages = 0
+    for key, cfg in SERIES.items():
+        for f in sorted(Path(cfg["dir"]).glob("[0-9][0-9][0-9][0-9]-[0-9][0-9].htm")):
+            n_pages += 1
+            html = f.read_bytes().decode("utf-8", "surrogateescape")
+            counts = {}
+            for cat, kind, url in image_problems(html, f.parent):
+                counts[cat] = counts.get(cat, 0) + 1
+                total[cat] += 1
+            if any(c not in HARMLESS for c in counts):
+                bad_pages[f] = {c: n for c, n in counts.items() if c not in HARMLESS}
+    for f, counts in bad_pages.items():
+        print(f"{f}: " + ", ".join(f"{n} {c}" for c, n in counts.items()))
+    real = sum(v for c, v in total.items() if c not in HARMLESS)
+    print(f"\n{n_pages} pages checked. Images not stored in the archive: {total['remote']} remote, "
+          f"{total['unusable']} unusable (blocked when the email was saved), "
+          f"{total['missing file']} missing file.")
+    print(f"Ignored as harmless: {total[HIDDEN_PIXEL]} hidden 1x1 tracking pixels, "
+          f"{total[FONT_REF]} font references the browser can't load.")
+    if total["remote"]:
+        print("Fix remote images:  python archive_newsletters.py --sanitise-existing "
+              "--localise-images")
+    if total["unusable"]:
+        print("Unusable images were blocked when the email was saved, so their addresses are "
+              "not in the file. Re-save that email with remote images loading and re-run it "
+              "with --from-file ... --force.")
+    if not real:
+        print("OK: every image is stored in the archive.")
+    return real
 
 
 # ------------------------------------------------------- README + index page
@@ -343,9 +466,6 @@ def index_html(allow_index=False):
     import calendar
     from html import escape
     present = _present()
-    total = sum(len(sl) for _, _, sl in present)
-    all_slugs = sorted(x for _, _, sl in present for x in sl)
-    span = f"{all_slugs[0][:4]} to {all_slugs[-1][:4]}" if all_slugs else ""
 
     def month_name(sl):
         return f"{calendar.month_name[int(sl[5:])]} {sl[:4]}"
@@ -385,14 +505,12 @@ def index_html(allow_index=False):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {robots}<title>SIH newsletter archive</title>
-<meta name="description" content="Saved copies of Sydney Informatics Hub newsletters and training updates.">
+<meta name="description" content="Archived copies of Sydney Informatics Hub newsletters and training updates.">
 <style>{INDEX_CSS}</style>
 </head>
 <body>
 <header><div class="wrap">
-<p class="org">Sydney Informatics Hub</p>
-<h1>Newsletter archive</h1>
-<p class="intro">{total} past issues, {span}, saved as web pages.</p>
+<h1>Sydney Informatics Hub Newsletter archive</h1>
 <ul class="latest" aria-label="Latest issues">{latest}</ul>
 </div></header>
 <main class="wrap">
@@ -548,11 +666,12 @@ CHANGE_RULES = [
     ("tracking pixel", r"t\.e2ma\.net/track/"),
     ("search highlight", r"data-markjs"),
     ("click redirect", r"t\.e2ma\.net/click/"),
+    ("remote image", r"""<img\b[^>]*?\bsrc=["']https?://"""),
 ]
 
 
 def sanitise_existing(only=None, dry_run=False, resolve=False, cache=None, cache_path=None,
-                      allow_index=False):
+                      allow_index=False, localise=False):
     """Re-apply the cleaning rules to pages that are already in the archive.
     Files are rewritten byte-for-byte except for the cleaned parts."""
     cache = cache if cache is not None else {}
@@ -569,6 +688,8 @@ def sanitise_existing(only=None, dry_run=False, resolve=False, cache=None, cache
                 SUBSCRIBE_FALLBACK[0] = cfg["subscribe"]
                 after = resolve_links(after, cache, cache_path, f"{key}/{f.stem}")
                 after = drop_tooltip_urls(after)
+            if localise and not dry_run:
+                after = localise_images(after, f.stem, f.parent)
             if after == before:
                 continue
             changed += 1
@@ -615,6 +736,9 @@ def main():
                     help="re-apply the cleaning rules to pages already in the archive "
                          "(both publications), rewriting them in place; combine with "
                          "--resolve-links to also resolve their tracking links")
+    ap.add_argument("--check-images", action="store_true",
+                    help="audit every archived page for images that are not stored locally "
+                         "(remote, blocked/unusable, missing); exits 1 if any are found")
     ap.add_argument("--dry-run", action="store_true",
                     help="with --sanitise-existing: show what would change, write nothing")
     ap.add_argument("--delay", type=float, default=DELAY,
@@ -627,10 +751,14 @@ def main():
         update_indexes(args.allow_index)
         return
 
+    if args.check_images:
+        sys.exit(1 if check_images() else 0)
+
     if args.sanitise_existing:
         cache_path = Path("link_cache.json")
         cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
-        sanitise_existing(args.only, args.dry_run, args.resolve_links, cache, cache_path)
+        sanitise_existing(args.only, args.dry_run, args.resolve_links, cache, cache_path,
+                          localise=args.localise_images)
         if UNRESOLVED:
             Path("unresolved_links.tsv").write_text(
                 "issue\tlink text\turl\n" + "\n".join("\t".join(r) for r in UNRESOLVED) + "\n")
@@ -697,6 +825,13 @@ def main():
             html = localise_images(html, slug, out_dir)
         target.write_text(html, encoding="utf-8")
         written += 1
+        left = [x for x in image_problems(html, out_dir) if x[0] not in HARMLESS]
+        if left:
+            cats = {}
+            for c, _, _ in left:
+                cats[c] = cats.get(c, 0) + 1
+            print("    ! images not stored locally: " + ", ".join(f"{n} {c}" for c, n in cats.items()),
+                  file=sys.stderr)
         if kind == "url":
             time.sleep(DELAY)
 
