@@ -11,7 +11,7 @@ There are two publications, each with its own folder so same-month issues don't 
 | Monthly newsletter | `docs/monthly/` | `.../newsletter/monthly/2026-10.htm` |
 | Training update | `docs/training/` | `.../newsletter/training/2026-09.htm` |
 
-Issues are named `YYYY-MM.htm`. Images are stored next to them in `img/`. `docs/index.html` (the front page), `docs/nav.js` (the previous/next bar on every issue) and `docs/404.html` (see below) are generated, so don't edit them by hand. `docs/assets/` holds the logo.
+Issues are named `YYYY-MM.htm`. Images are stored next to them in `img/`. `docs/index.html` (the front page), `docs/nav.js` (the previous/next bar on every issue), `docs/404.html` (see below) and `docs/search/data.js` and `docs/search/search.js` (the search box) are generated, so don't edit them by hand. `docs/assets/` holds the logo.
 
 Monthly issues used to sit next to `index.html` (for example `.../newsletter/2024-08.htm`). `docs/404.html` sends any such old address to `.../newsletter/monthly/2024-08.htm`, so existing links keep working.
 
@@ -63,7 +63,7 @@ The repository is public, so look at the result first.
 1. Try one issue before a big batch (for example `--only 2026-11`, or a folder holding a single file) and open the page in a browser.
 2. Read `unresolved_links.tsv`, which the script writes in the repo root. It lists links that could not be resolved and still point at a tracking address, and any link that was replaced because it looked personal (marked `[PERSONAL LINK REMOVED]`).
 3. Run `python archive_newsletters.py --check-images`. It should finish with `OK: every image is stored in the archive.` If it lists pages, see "Making sure every image is stored" below.
-4. Run `git status` and `git diff --stat`. You should see new `docs/monthly/YYYY-MM.htm` (or `docs/training/YYYY-MM.htm`) files, their `img/` folders, `docs/index.html`, `docs/nav.js` and this README. You should **not** see the raw email exports.
+4. Run `git status` and `git diff --stat`. You should see new `docs/monthly/YYYY-MM.htm` (or `docs/training/YYYY-MM.htm`) files, their `img/` folders, `docs/index.html`, `docs/nav.js`, `docs/search/data.js` and this README. You should **not** see the raw email exports.
 5. Commit and push. GitHub Pages republishes within a few minutes.
 
 `link_cache.json` and `unresolved_links.tsv` are local working files and are listed in `.gitignore`.
@@ -79,6 +79,23 @@ It works through one shared file, `docs/nav.js`, which contains the list of issu
 - New issues get the hook automatically. Pages already in the archive get it from `--sanitise-existing`, which is safe to repeat.
 
 The bar is drawn in an isolated container so an email's own styles can't distort it, and it is hidden when printing. It needs JavaScript; without it, only an "All issues" link appears at the bottom of the page.
+
+## Search
+
+The front page has a search box that looks through the full text of every issue. Type a word or phrase and the matching issues appear with a short passage and the matched words highlighted; a menu limits the search to one publication. A search can be shared as a link, for example `.../newsletter/?q=nextflow&in=training`.
+
+How it behaves:
+
+- All the words you type must appear in the issue. The last word also matches as a prefix, so results appear as you type.
+- A word of six or more letters tolerates a typo (`worshop` finds `workshop`). Those results appear under "Similar matches". Shorter words must be exact, because one edit turns "hall" into "all".
+- The month and year in an issue's title are searchable too, so `March 2023` finds that issue.
+- A result opens the issue and, in browsers that support it, scrolls to and highlights the matched word.
+- Text inside images is not searchable, and each issue is searched as a whole rather than article by article.
+- Without JavaScript the search box is simply not shown; the lists below it still work.
+
+How it works. Search runs entirely in the browser, with no server. [MiniSearch](https://github.com/lucaong/minisearch) (MIT licence, version 7.2.0, in `docs/search/minisearch.min.js`; licence text in `docs/search/LICENSE-minisearch.txt`) builds an index from `docs/search/data.js`, which holds the plain text of every issue, one issue per line. The data (about 220 KB compressed) is only downloaded the first time someone clicks the search box.
+
+Keeping it current. `docs/search/data.js` and `docs/search/search.js` are rebuilt by the script after any run that adds an issue, or on demand with `python archive_newsletters.py --update-indexes`. Text that appears in 90% or more of a publication's issues (footers, "Contact us", "Keep in touch") is left out so it doesn't match everything; the share is `BOILERPLATE_SHARE` in the script. To upgrade MiniSearch, replace `docs/search/minisearch.min.js` with a newer minified UMD build and re-check the search by hand.
 
 ## Script options
 
@@ -98,7 +115,7 @@ The bar is drawn in an isolated container so an email's own styles can't distort
 | `--out DIR` | Write to a different folder instead of the series default. |
 | `--sanitise-existing` | Re-apply the cleaning rules to every page already in the archive (both publications), rewriting them in place. Add `--dry-run` first to see what would change without writing anything. Add `--resolve-links` to also resolve their tracking links. It also adds the navigation hook to any page missing it. |
 | `--dry-run` | With `--sanitise-existing`: list what would change and write nothing. |
-| `--update-indexes` | Only rebuild the list below, `docs/index.html`, `docs/nav.js` and `docs/404.html`; no downloads. This also happens automatically after any run that adds an issue. |
+| `--update-indexes` | Only rebuild the list below, `docs/index.html`, `docs/nav.js`, `docs/404.html` and the search files; no downloads. This also happens automatically after any run that adds an issue. |
 
 ## What the script changes in each issue
 

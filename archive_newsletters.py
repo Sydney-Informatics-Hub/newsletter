@@ -8,7 +8,7 @@ Run from the root of your clone of Sydney-Informatics-Hub/newsletter:
     python archive_newsletters.py --resolve-links --localise-images   # recommended
     python archive_newsletters.py --only 2026-10       # one issue
     python archive_newsletters.py --from-dir DIR --series training ...   # training updates
-    python archive_newsletters.py --update-indexes     # rebuild README list, docs/index.html, nav.js, 404.html
+    python archive_newsletters.py --update-indexes     # rebuild README list, index.html, nav.js, 404.html, search/
     python archive_newsletters.py --sanitise-existing --dry-run   # preview cleaning old pages
     python archive_newsletters.py --check-images       # are all images stored in the archive?
 
@@ -36,6 +36,7 @@ What it does to each page, and why
    unless you pass --allow-index.
 """
 import argparse
+import collections
 import hashlib
 import json
 import re
@@ -44,6 +45,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -470,6 +472,23 @@ h2{margin:0;font-size:1.5rem;color:#000}
 .months a:hover,.months a:focus-visible{background:var(--navy);color:#fff;border-top-color:var(--navy)}
 .months .gap{color:#767676;border:1px dashed #d3cbc4}
 .months .pending{visibility:hidden}
+[hidden]{display:none!important}
+#search{margin-top:2rem}
+#search label{display:block;margin:0 0 .35rem;font-weight:bold;color:#000}
+#search .row{display:flex;flex-wrap:wrap;gap:.6rem}
+#search input,#search select{font:inherit;color:var(--charcoal);background:#fff;border:2px solid var(--charcoal);border-radius:0;padding:.65rem .8rem}
+#search input{flex:1 1 16rem;min-width:0}
+#search input:focus-visible,#search select:focus-visible{outline:3px solid var(--navy);outline-offset:2px}
+#search-status{margin:.75rem 0 0;min-height:1.5em}
+#results h2{margin:1.5rem 0 .25rem;font-size:1.1rem}
+.hits{margin:0;padding:0;list-style:none}
+.hits li{padding:.9rem 0;border-top:1px solid var(--rule)}
+.hits h3{margin:0;font-size:1.1rem}
+.hits h3 a{color:var(--navy)}
+.hits h3 a:focus-visible{outline:3px solid var(--navy);outline-offset:2px}
+.hits .meta,#results .meta{margin:.1rem 0 .35rem;font-size:.9rem}
+.hits .snip{margin:0;max-width:44rem}
+.hits mark{background:var(--sandstone);color:#000;font-weight:bold;border-bottom:2px solid var(--ochre)}
 footer{margin-top:3rem;padding:1.25rem 0 2.5rem;border-top:1px solid var(--rule);font-size:.9rem}
 footer p{margin:.25rem 0}
 footer a{color:var(--charcoal)}
@@ -514,6 +533,8 @@ def index_html(allow_index=False):
             f'<p class="meta">{escape(cfg["about"])} {len(slugs)} issues, '
             f'{slugs[-1][:4]} to {slugs[0][:4]}.</p>{"".join(rows)}</section>')
 
+    pub_options = "".join(f'<option value="{k}">{escape(v["label"])}</option>'
+                          for k, _, _ in present for v in [SERIES[k]])
     robots = "" if allow_index else '<meta name="robots" content="noindex, nofollow">\n'
     return f"""<!DOCTYPE html>
 <html lang="en-AU">
@@ -532,13 +553,25 @@ def index_html(allow_index=False):
 <ul class="latest" aria-label="Latest issues">{latest}</ul>
 </div>
 </div></header>
-<main class="wrap">
+<div class="wrap" id="search" role="search" hidden>
+<form id="search-form" action="#" autocomplete="off">
+<label for="q">Search all issues</label>
+<div class="row">
+<input id="q" name="q" type="search" placeholder="For example: Nextflow, or March 2023" enterkeyhint="search" spellcheck="false">
+<select id="pub" aria-label="Publication"><option value="all">All publications</option>{pub_options}</select>
+</div>
+</form>
+<p id="search-status" role="status" aria-live="polite"></p>
+<div id="results"></div>
+</div>
+<main class="wrap" id="browse">
 {"".join(sections)}
 </main>
 <footer><div class="wrap">
 <p>These are saved copies of emails sent to subscribers. Links in older issues may no longer work.</p>
 <p>Gaps in the grid are months with no issue. <a href="{REPO_URL}">How to add issues (GitHub)</a></p>
 </div></footer>
+<script src="search/search.js" defer></script>
 </body>
 </html>
 """
@@ -550,7 +583,13 @@ def update_indexes(allow_index=False):
     (DOCS_DIR / "index.html").write_text(index_html(allow_index), encoding="utf-8")
     (DOCS_DIR / "nav.js").write_text(nav_js(), encoding="utf-8")
     (DOCS_DIR / "404.html").write_text(not_found_html(), encoding="utf-8")
-    print("README.md list, docs/index.html, docs/nav.js and docs/404.html rebuilt")
+    SEARCH_DIR.mkdir(parents=True, exist_ok=True)
+    (SEARCH_DIR / "data.js").write_text(search_data_js(), encoding="utf-8")
+    (SEARCH_DIR / "search.js").write_text(search_js(), encoding="utf-8")
+    if not (SEARCH_DIR / "minisearch.min.js").exists():
+        print("WARNING: docs/search/minisearch.min.js is missing, so search will not work. "
+              "See the README section on search.", file=sys.stderr)
+    print("README.md list, docs/index.html, nav.js, 404.html and docs/search/ rebuilt")
 
 
 # ------------------------------------------------------ previous / next navigation
@@ -713,6 +752,283 @@ def add_nav_hook(html, src):
     if i < 0:
         return html.rstrip() + "\n" + hook + "\n"
     return html[:i] + hook + "\n" + html[i:]
+
+
+# ------------------------------------------------------------------- search
+SEARCH_DIR = DOCS_DIR / "search"
+BOILERPLATE_SHARE = 0.9   # a text block present in this share of a series' issues is boilerplate
+
+
+class _TextBlocks(HTMLParser):
+    """Collect the visible text of a page as a list of blocks (paragraphs, table cells...)."""
+    SKIP = {"script", "style", "head", "noscript", "template", "svg", "title"}
+    BLOCK = {"p", "div", "br", "li", "ul", "ol", "tr", "td", "th", "table", "tbody", "thead",
+             "tfoot", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "header",
+             "footer", "blockquote", "hr", "center", "pre", "dd", "dt", "dl"}
+    VOID = {"br", "img", "hr", "input", "meta", "link", "area", "base", "col", "embed",
+            "source", "track", "wbr", "param"}
+    HIDDEN = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden|mso-hide\s*:\s*all", re.I)
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.blocks, self.cur, self.stack, self.skip = [], [], [], 0
+
+    def _flush(self):
+        text = " ".join("".join(self.cur).split())
+        if text:
+            self.blocks.append(text)
+        self.cur = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        hidden = (tag in self.SKIP or bool(self.HIDDEN.search(a.get("style") or ""))
+                  or "hidden" in a)
+        if tag in self.VOID:
+            if tag in self.BLOCK:
+                self._flush()
+            return
+        self.stack.append((tag, hidden))
+        self.skip += hidden
+        if tag in self.BLOCK:
+            self._flush()
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in self.BLOCK:
+            self._flush()
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack) - 1, -1, -1):      # tolerate unclosed tags
+            if self.stack[i][0] == tag:
+                self.skip -= sum(1 for _, h in self.stack[i:] if h)
+                del self.stack[i:]
+                break
+        if tag in self.BLOCK:
+            self._flush()
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.cur.append(data)
+
+    def close(self):
+        super().close()
+        self._flush()
+
+
+def page_blocks(html):
+    parser = _TextBlocks()
+    parser.feed(html)
+    parser.close()
+    return parser.blocks
+
+
+def search_docs():
+    """One searchable document per issue: its visible text minus boilerplate that appears
+    in nearly every issue of its series (footers, 'Contact us', 'Keep in touch'...)."""
+    import calendar
+    docs = []
+    for key, cfg, slugs in _present():
+        pages = {sl: page_blocks(Path(cfg["dir"], f"{sl}.htm").read_bytes().decode("utf-8", "replace"))
+                 for sl in slugs}
+        n = len(pages)
+        counts = collections.Counter(b for blocks in pages.values() for b in set(blocks))
+        common = {b for b, c in counts.items() if n >= 8 and c / n >= BOILERPLATE_SHARE}
+        for sl, blocks in pages.items():
+            year, month = sl.split("-")
+            docs.append({"id": f"{cfg['url_path']}{sl}", "series": key, "date": sl,
+                         "title": f"{cfg['title']}, {calendar.month_name[int(month)]} {year}",
+                         "url": f"{cfg['url_path']}{sl}.htm",
+                         "text": " ".join(b for b in blocks if b not in common)})
+    return docs
+
+
+def search_data_js():
+    """The data file, one issue per line so a new issue is a one-line change in git."""
+    rows = ",\n".join(json.dumps(d, separators=(",", ":")) for d in search_docs())
+    return ("/* Search data for the archive index. Generated by archive_newsletters.py "
+            "(rebuilt by --update-indexes). Do not edit by hand. */\n"
+            f"window.SIH_SEARCH = [\n{rows}\n];\n")
+
+
+SEARCH_TEMPLATE = r"""/* Search for the archive index page. Generated by archive_newsletters.py
+   (rebuilt by --update-indexes). Uses MiniSearch (MIT; see LICENSE-minisearch.txt).
+   Do not edit by hand. */
+(function () {
+  "use strict";
+  var LABELS = __LABELS__;
+  var box = document.getElementById("search");
+  var form = document.getElementById("search-form");
+  if (!box || !form || !window.Promise) return;          // no search box, or a very old browser
+  var input = document.getElementById("q");
+  var pub = document.getElementById("pub");
+  var status = document.getElementById("search-status");
+  var out = document.getElementById("results");
+  var browse = document.getElementById("browse");
+  box.hidden = false;                                     // the box only appears when JS runs
+
+  var STOP = new Set(["a", "an", "and", "at", "by", "for", "in", "is", "of", "on", "or", "the", "to", "with"]);
+  function norm(t) {
+    t = t.toLowerCase();
+    if (t.normalize) t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return STOP.has(t) ? null : t;
+  }
+  function lastTermPrefix(term, i, terms) { return i === terms.length - 1; }   // search as you type
+  // Typo tolerance only for longer words: on short words one edit turns "hall" into "all" or
+  // "town" into "down", which floods the results with nonsense.
+  function fuzz(term) { return term.length < 6 ? false : (term.length < 10 ? 1 : 2); }
+
+  var ms = null, byId = {}, ready = null, failed = false;
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = function () { reject(new Error("could not load " + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  function load() {
+    if (!ready) {
+      ready = loadScript("search/minisearch.min.js").then(function () {
+        return loadScript("search/data.js");
+      }).then(function () {
+        ms = new MiniSearch({
+          fields: ["title", "text"], storeFields: ["title", "url", "series", "date"], idField: "id",
+          processTerm: norm,
+          searchOptions: { boost: { title: 3 }, combineWith: "AND", processTerm: norm }
+        });
+        window.SIH_SEARCH.forEach(function (d) { byId[d.id] = d; });
+        ms.addAll(window.SIH_SEARCH);
+      }).catch(function (e) { failed = true; throw e; });
+    }
+    return ready;
+  }
+
+  function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+  // A short passage around the first match, with the matched words wrapped in <mark>.
+  function snippet(text, terms) {
+    var re = terms.length ? new RegExp("(" + terms.map(esc).join("|") + ")", "gi") : null;
+    var hit = re ? re.exec(text) : null;
+    var start = hit ? Math.max(0, hit.index - 70) : 0;
+    var end = Math.min(text.length, start + 230);
+    if (start > 0) { var a = text.indexOf(" ", start); if (a > -1 && a < start + 25) start = a + 1; }
+    if (end < text.length) { var b = text.lastIndexOf(" ", end); if (b > start + 100) end = b; }
+    var piece = text.slice(start, end);
+    var p = document.createElement("p");
+    p.className = "snip";
+    if (start > 0) p.appendChild(document.createTextNode("\u2026 "));
+    if (re) {
+      piece.split(new RegExp("(" + terms.map(esc).join("|") + ")", "gi")).forEach(function (part, i) {
+        if (i % 2) { var m = document.createElement("mark"); m.textContent = part; p.appendChild(m); }
+        else if (part) p.appendChild(document.createTextNode(part));
+      });
+    } else p.appendChild(document.createTextNode(piece));
+    if (end < text.length) p.appendChild(document.createTextNode(" \u2026"));
+    return { node: p, word: hit ? hit[0] : null };
+  }
+
+  function card(r) {
+    var d = byId[r.id];
+    var sn = snippet(d.text, r.terms || []);
+    var li = document.createElement("li");
+    var h = document.createElement("h3");
+    var a = document.createElement("a");
+    // "#:~:text=" makes supporting browsers scroll to and highlight the match in the issue
+    a.href = d.url + (sn.word ? "#:~:text=" + encodeURIComponent(sn.word).replace(/-/g, "%2D") : "");
+    a.textContent = d.title;
+    h.appendChild(a);
+    var meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = LABELS[d.series];
+    li.appendChild(h); li.appendChild(meta); li.appendChild(sn.node);
+    return li;
+  }
+
+  function sortHits(list) {
+    return list.sort(function (x, y) { return y.score - x.score || (y.date < x.date ? -1 : 1); });
+  }
+  function section(title, list) {
+    var wrap = document.createElement("div");
+    if (title) { var h = document.createElement("h2"); h.textContent = title; wrap.appendChild(h); }
+    var ul = document.createElement("ul");
+    ul.className = "hits";
+    list.slice(0, 60).forEach(function (r) { ul.appendChild(card(r)); });
+    wrap.appendChild(ul);
+    if (list.length > 60) {
+      var more = document.createElement("p");
+      more.className = "meta";
+      more.textContent = "Showing the first 60 of " + list.length + ". Add a word to narrow it down.";
+      wrap.appendChild(more);
+    }
+    return wrap;
+  }
+
+  function render(q) {
+    var which = pub.value;
+    var filter = function (r) { return which === "all" || r.series === which; };
+    var exact = sortHits(ms.search(q, { prefix: lastTermPrefix, fuzzy: false, filter: filter }));
+    var seen = {};
+    exact.forEach(function (r) { seen[r.id] = true; });
+    var similar = sortHits(ms.search(q, { prefix: lastTermPrefix, fuzzy: fuzz, filter: filter })
+      .filter(function (r) { return !seen[r.id]; }));
+    out.textContent = "";
+    var word = function (n) { return n + (n === 1 ? " issue" : " issues"); };
+    if (!exact.length && !similar.length) {
+      status.textContent = "No issues match \u201c" + q + "\u201d. Try fewer or different words.";
+      return;
+    }
+    status.textContent = (exact.length ? word(exact.length) + " match \u201c" + q + "\u201d" : "No exact matches for \u201c" + q + "\u201d") +
+      (similar.length ? (exact.length ? ", plus " : "; ") + similar.length + " similar" : "") + ".";
+    if (exact.length) out.appendChild(section(null, exact));
+    if (similar.length) out.appendChild(section("Similar matches", similar));
+  }
+
+  function setUrl(q) {
+    try {
+      var params = [];
+      if (q) params.push("q=" + encodeURIComponent(q));
+      if (q && pub.value !== "all") params.push("in=" + pub.value);
+      history.replaceState(null, "", location.pathname + (params.length ? "?" + params.join("&") : ""));
+    } catch (e) { /* file:// pages can't change their address; harmless */ }
+  }
+
+  var timer = null;
+  function run() {
+    var q = input.value.trim();
+    setUrl(q);
+    if (!q) {
+      out.textContent = ""; status.textContent = "";
+      browse.hidden = false;
+      return;
+    }
+    browse.hidden = true;
+    if (!ms && !failed) status.textContent = "Loading search\u2026";
+    load().then(function () {
+      if (input.value.trim() === q) render(q);
+    }, function () {
+      browse.hidden = false;
+      status.textContent = "Search could not be loaded. You can still browse the lists below.";
+    });
+  }
+
+  input.addEventListener("focus", function () { load().catch(function () {}); }, { once: true });
+  input.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(run, 120); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && input.value) { input.value = ""; run(); }
+  });
+  pub.addEventListener("change", run);
+  form.addEventListener("submit", function (e) { e.preventDefault(); clearTimeout(timer); run(); });
+
+  var params = new URLSearchParams(location.search);
+  if (params.get("in") && /^(newsletter|training)$/.test(params.get("in"))) pub.value = params.get("in");
+  if (params.get("q")) { input.value = params.get("q"); run(); }
+})();
+"""
+
+
+def search_js():
+    labels = {k: v["label"] for k, v in SERIES.items()}
+    return SEARCH_TEMPLATE.replace("__LABELS__", json.dumps(labels))
 
 
 # --------------------------------------------------- Outlook web-app exports
@@ -914,7 +1230,7 @@ def main():
                     help="remove noindex/nofollow so search engines may index pages")
     ap.add_argument("--update-indexes", "--readme-only", dest="update_indexes",
                     action="store_true",
-                    help="only rebuild the README list, docs/index.html, docs/nav.js and docs/404.html from the folders "
+                    help="only rebuild the README list, docs/index.html, nav.js, 404.html and search/ from the folders "
                          "on disk; no downloads (this also happens after every normal run)")
     ap.add_argument("--sanitise-existing", action="store_true",
                     help="re-apply the cleaning rules to pages already in the archive "
