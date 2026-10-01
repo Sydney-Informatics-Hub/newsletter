@@ -1,5 +1,46 @@
 # SIH Newsletter Archive
+
 Archive of SIH Newsletters
+
+## 2026
+
+[2026-10](https://sydney-informatics-hub.github.io/newsletter/2026-10.htm)
+
+[2026-09](https://sydney-informatics-hub.github.io/newsletter/2026-09.htm)
+
+[2026-08](https://sydney-informatics-hub.github.io/newsletter/2026-08.htm)
+
+[2026-07](https://sydney-informatics-hub.github.io/newsletter/2026-07.htm)
+
+[2026-06](https://sydney-informatics-hub.github.io/newsletter/2026-06.htm)
+
+[2026-05](https://sydney-informatics-hub.github.io/newsletter/2026-05.htm)
+
+[2026-04](https://sydney-informatics-hub.github.io/newsletter/2026-04.htm)
+
+[2026-03](https://sydney-informatics-hub.github.io/newsletter/2026-03.htm)
+
+[2026-02](https://sydney-informatics-hub.github.io/newsletter/2026-02.htm)
+
+## 2025
+
+[2025-12](https://sydney-informatics-hub.github.io/newsletter/2025-12.htm)
+
+[2025-11](https://sydney-informatics-hub.github.io/newsletter/2025-11.htm)
+
+[2025-10](https://sydney-informatics-hub.github.io/newsletter/2025-10.htm)
+
+[2025-09](https://sydney-informatics-hub.github.io/newsletter/2025-09.htm)
+
+[2025-08](https://sydney-informatics-hub.github.io/newsletter/2025-08.htm)
+
+[2025-07](https://sydney-informatics-hub.github.io/newsletter/2025-07.htm)
+
+[2025-06](https://sydney-informatics-hub.github.io/newsletter/2025-06.htm)
+
+[2025-05](https://sydney-informatics-hub.github.io/newsletter/2025-05.htm)
+
+[2025-04](https://sydney-informatics-hub.github.io/newsletter/2025-04.htm)
 
 ## 2024
 
@@ -15,9 +56,9 @@ Archive of SIH Newsletters
 
 [2024-02](https://sydney-informatics-hub.github.io/newsletter/2024-02.htm)
 
-[2023-12](https://sydney-informatics-hub.github.io/newsletter/2023-12.htm)
-
 ## 2023
+
+[2023-12](https://sydney-informatics-hub.github.io/newsletter/2023-12.htm)
 
 [2023-11](https://sydney-informatics-hub.github.io/newsletter/2023-11.htm)
 
