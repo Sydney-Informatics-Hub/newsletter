@@ -4,10 +4,9 @@
   "use strict";
 
   // Page-view counting (GoatCounter). Every issue page loads this file, so it is switched on
-  // here instead of by editing each page. The settings go first because count.js is async.
+  // here instead of by editing each page.
   var GC = {"endpoint": "https://sih.goatcounter.com/count", "script": "https://gc.zgo.at/count.js"};
   if (GC) {
-    window.goatcounter = window.goatcounter || { path: function (p) { return location.host + p; } };
     var gc = document.createElement("script");
     gc.async = true;
     gc.setAttribute("data-goatcounter", GC.endpoint);

@@ -149,8 +149,8 @@
 
   // ---- what people look for, sent to GoatCounter as events (see README) ----------------------
   // Typing doesn't reload the page, so it would never be counted as a page view. An event is sent
-  // once the person pauses, so "n", "ne", "nex" don't each count. Event paths need the host added
-  // by hand (the automatic page-view path gets it from the settings).
+  // once the person pauses, so "n", "ne", "nex" don't each count. The event name starts with this
+  // site's folder (newsletter/search?q=...), so it can't be confused with another site's events.
   var TRACK = true;
   var dir = location.pathname.replace(/[^\/]*$/, "");          // e.g. /newsletter/
   var sent = {}, trackTimer = null, fromLink = false;
@@ -159,7 +159,7 @@
     if (!TRACK || !gc || typeof gc.count !== "function") return;   // blocked or not loaded yet
     q = q.slice(0, 200);
     var qs = "?q=" + encodeURIComponent(q) + (pub.value !== "all" ? "&in=" + pub.value : "") + (extra || "");
-    gc.count({ event: true, path: location.host + dir + name + qs, title: title });
+    gc.count({ event: true, path: dir + name + qs, title: title });
   }
   function settled(q, total) {
     clearTimeout(trackTimer);
