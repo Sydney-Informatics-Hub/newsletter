@@ -97,6 +97,21 @@ How it works. Search runs entirely in the browser, with no server. [MiniSearch](
 
 Keeping it current. `docs/search/data.js` and `docs/search/search.js` are rebuilt by the script after any run that adds an issue, or on demand with `python archive_newsletters.py --update-indexes`. Text that appears in 90% or more of a publication's issues (footers, "Contact us", "Keep in touch") is left out so it doesn't match everything; the share is `BOILERPLATE_SHARE` in the script. To upgrade MiniSearch, replace `docs/search/minisearch.min.js` with a newer minified UMD build and re-check the search by hand.
 
+## Analytics
+
+The front page and every issue are counted with [GoatCounter](https://www.goatcounter.com), reporting to `sih.goatcounter.com`.
+
+What is recorded:
+
+- **Page views** of the front page and of each issue, with the address including any search parameters, for example `index.html?q=nextflow&in=training`. The address starts with the site's host name, so this site can be told apart from other sites that report to the same GoatCounter account. GoatCounter itself removes a few well-known tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`...) and keeps the rest.
+- **Searches typed into the search box**, which don't reload the page and so would otherwise be invisible. They are recorded as events: `search` (the query found issues; the title shows how many), `search-none` (nothing matched, which shows what people look for and can't find) and `search-open` (which issue someone opened from a query). A search is recorded once the person pauses typing, not once per keystroke, and only once per query and publication in a visit. A search that arrived as a `?q=` link is already in the page-view address, so it is only recorded again if it found nothing.
+
+What is not counted: previews on your own computer (`file://` and `localhost`, which GoatCounter's own script skips), the 404 page, and visitors whose browser blocks GoatCounter (the page still works for them).
+
+How it is wired: the front page carries GoatCounter's snippet with your settings first, because the script is `async` and may run as soon as it downloads. Issue pages are switched on from `docs/nav.js`, which every issue already loads, so the issue pages themselves are unchanged and new issues are counted automatically. The settings are the `GOATCOUNTER`, `GOATCOUNTER_JS` and `TRACK_SEARCH` constants in the script; after changing one, run `python archive_newsletters.py --update-indexes`.
+
+Privacy: GoatCounter says it identifies visits without cookies and needs no consent notice. Search terms are different: they are free text that visitors type, and could contain names or other personal details. To keep page views but stop sending what people type, set `TRACK_SEARCH = False`. To turn all analytics off, set `GOATCOUNTER = ""`.
+
 ## Script options
 
 | Option | What it does |
@@ -125,6 +140,7 @@ Saved newsletters contain things that should not be published, so each page is c
 - Personal unsubscribe, update-preferences and subscribe links (which carry a recipient's member ID and token) are replaced with a generic address. They are matched by Emma's markup and by the link text.
 - With `--resolve-links`, tracking redirects are replaced with the real destination. If a resolved address looks recipient-specific (an unsubscribe or opt-out address, or an `email=` parameter) it is replaced too. This is a safety net, not a guarantee, so skim a couple of pages.
 - Contents links ("News and Announcements", "Training and Events") that pointed at the expiring web-view page become plain jumps within the page.
+- Emma's `Content-Security-Policy` tag (`script-src 'self'`) is removed. It means nothing in the archive and would stop analytics and other scripts from loading.
 - The browser's "saved from url" comment, which reveals the web-view address, is removed.
 - A two-line navigation hook is added just before `</body>` (see "Navigation between issues").
 - Outlook leftovers are removed: the application shell, yellow search highlights, internal ids and link tooltips.

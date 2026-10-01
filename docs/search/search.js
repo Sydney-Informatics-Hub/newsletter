@@ -127,9 +127,11 @@
     out.textContent = "";
     var word = function (n) { return n + (n === 1 ? " issue" : " issues"); };
     if (!exact.length && !similar.length) {
+      settled(q, 0);
       status.textContent = "No issues match \u201c" + q + "\u201d. Try fewer or different words.";
       return;
     }
+    settled(q, exact.length + similar.length);
     status.textContent = (exact.length ? word(exact.length) + " match \u201c" + q + "\u201d" : "No exact matches for \u201c" + q + "\u201d") +
       (similar.length ? (exact.length ? ", plus " : "; ") + similar.length + " similar" : "") + ".";
     if (exact.length) out.appendChild(section(null, exact));
@@ -145,9 +147,43 @@
     } catch (e) { /* file:// pages can't change their address; harmless */ }
   }
 
+  // ---- what people look for, sent to GoatCounter as events (see README) ----------------------
+  // Typing doesn't reload the page, so it would never be counted as a page view. An event is sent
+  // once the person pauses, so "n", "ne", "nex" don't each count. Event paths need the host added
+  // by hand (the automatic page-view path gets it from the settings).
+  var TRACK = true;
+  var dir = location.pathname.replace(/[^\/]*$/, "");          // e.g. /newsletter/
+  var sent = {}, trackTimer = null, fromLink = false;
+  function track(name, q, title, extra) {
+    var gc = window.goatcounter;
+    if (!TRACK || !gc || typeof gc.count !== "function") return;   // blocked or not loaded yet
+    q = q.slice(0, 200);
+    var qs = "?q=" + encodeURIComponent(q) + (pub.value !== "all" ? "&in=" + pub.value : "") + (extra || "");
+    gc.count({ event: true, path: location.host + dir + name + qs, title: title });
+  }
+  function settled(q, total) {
+    clearTimeout(trackTimer);
+    trackTimer = setTimeout(function () {
+      var key = q + "|" + pub.value + "|" + (total ? "found" : "none");
+      if (sent[key]) return;
+      // a search that arrived as a ?q= link is already in the page-view path; don't count it twice,
+      // but do record it if it found nothing
+      if (total === 0) track("search-none", q, q + " (no results)");
+      else if (!fromLink) track("search", q, q + " (" + total + (total === 1 ? " issue)" : " issues)"));
+      sent[key] = true;
+    }, 1500);
+  }
+  out.addEventListener("click", function (e) {
+    var a = e.target.closest ? e.target.closest("a") : null;
+    if (!a) return;
+    track("search-open", input.value.trim(), "Opened " + a.textContent + " from search",
+          "&to=" + encodeURIComponent(a.getAttribute("href").split("#")[0]));
+  });
+
   var timer = null;
   function run() {
     var q = input.value.trim();
+    clearTimeout(trackTimer);
     setUrl(q);
     if (!q) {
       out.textContent = ""; status.textContent = "";
@@ -165,14 +201,14 @@
   }
 
   input.addEventListener("focus", function () { load().catch(function () {}); }, { once: true });
-  input.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(run, 120); });
+  input.addEventListener("input", function () { fromLink = false; clearTimeout(timer); timer = setTimeout(run, 120); });
   input.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && input.value) { input.value = ""; run(); }
   });
-  pub.addEventListener("change", run);
+  pub.addEventListener("change", function () { fromLink = false; run(); });
   form.addEventListener("submit", function (e) { e.preventDefault(); clearTimeout(timer); run(); });
 
   var params = new URLSearchParams(location.search);
   if (params.get("in") && /^(newsletter|training)$/.test(params.get("in"))) pub.value = params.get("in");
-  if (params.get("q")) { input.value = params.get("q"); run(); }
+  if (params.get("q")) { input.value = params.get("q"); fromLink = true; run(); }
 })();
