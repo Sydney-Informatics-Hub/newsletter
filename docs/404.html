@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Page not found - SIH newsletter archive</title>
+<style>
+body{margin:0;color:#414141;font:16px/1.5 Arial,sans-serif;border-top:.6rem solid #E64626}
+main{max-width:36rem;margin:3rem auto;padding:0 1.25rem}
+h1{color:#000;font-size:1.75rem;margin:0 0 .75rem}
+a{color:#1A345E}
+</style>
+</head>
+<body>
+<main>
+<h1>Page not found</h1>
+<p>There is no page at this address. Issues of the monthly newsletter now live in the
+<code>monthly/</code> folder; if you followed an older link you will be taken there.</p>
+<p><a href="https://sydney-informatics-hub.github.io/newsletter/">Browse all issues</a></p>
+</main>
+<script>
+(function () {
+  // an old address such as /2024-08.htm  ->  /monthly/2024-08.htm
+  var m = location.pathname.match(/^(.*\/)(\d{4}-\d{2})(?:\.html?)?$/);
+  if (m && !/\/(monthly|training)\/$/.test(m[1])) {
+    location.replace(m[1] + "monthly/" + m[2] + ".htm" + location.search + location.hash);
+  }
+})();
+</script>
+</body>
+</html>
