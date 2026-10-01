@@ -20,10 +20,14 @@
     if (t.normalize) t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     return STOP.has(t) ? null : t;
   }
-  function lastTermPrefix(term, i, terms) { return i === terms.length - 1; }   // search as you type
-  // Typo tolerance only for longer words: on short words one edit turns "hall" into "all" or
-  // "town" into "down", which floods the results with nonsense.
-  function fuzz(term) { return term.length < 6 ? false : (term.length < 10 ? 1 : 2); }
+  // Two passes. Exact matches come first: every word must be present and the last word may be
+  // unfinished (search as you type). "Similar matches" then follow, and are deliberately loose
+  // so people reach the right issue after only a few keystrokes: partial words anywhere
+  // ("tow hal" finds "town hall") and typos from three letters up (one slip, more for longer
+  // words). The cost is some irrelevant results lower down, which is the intended trade.
+  function lastTermPrefix(term, i, terms) { return i === terms.length - 1; }
+  function anyTermPrefix(term) { return term.length >= 2; }
+  function fuzz(term) { return term.length < 3 ? false : Math.min(3, Math.ceil(term.length * 0.25)); }
 
   var ms = null, byId = {}, ready = null, failed = false;
   function loadScript(src) {
@@ -118,7 +122,7 @@
     var exact = sortHits(ms.search(q, { prefix: lastTermPrefix, fuzzy: false, filter: filter }));
     var seen = {};
     exact.forEach(function (r) { seen[r.id] = true; });
-    var similar = sortHits(ms.search(q, { prefix: lastTermPrefix, fuzzy: fuzz, filter: filter })
+    var similar = sortHits(ms.search(q, { prefix: anyTermPrefix, fuzzy: fuzz, filter: filter })
       .filter(function (r) { return !seen[r.id]; }));
     out.textContent = "";
     var word = function (n) { return n + (n === 1 ? " issue" : " issues"); };

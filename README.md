@@ -87,7 +87,7 @@ The front page has a search box that looks through the full text of every issue.
 How it behaves:
 
 - All the words you type must appear in the issue. The last word also matches as a prefix, so results appear as you type.
-- A word of six or more letters tolerates a typo (`worshop` finds `workshop`). Those results appear under "Similar matches". Shorter words must be exact, because one edit turns "hall" into "all".
+- Below the exact matches, a looser pass lists "Similar matches": partial words anywhere in the query (`tow hal` finds "town hall") and typos from three letters up (`worshop` finds `workshop`, `hpx` finds `hpc`). This is deliberately generous so people reach the right issue after a few keystrokes, at the cost of some irrelevant results lower down. The rules are `fuzz` and `anyTermPrefix` in the search template in the script.
 - The month and year in an issue's title are searchable too, so `March 2023` finds that issue.
 - A result opens the issue and, in browsers that support it, scrolls to and highlights the matched word.
 - Text inside images is not searchable, and each issue is searched as a whole rather than article by article.
